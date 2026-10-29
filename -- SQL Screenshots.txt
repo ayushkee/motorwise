@@ -1,0 +1,126 @@
+-- Database Design and Setup
+
+-- First, the EER diagram: Database → Reverse Engineer → pick motorwise → Next through the screens → Execute → Finish. Then File → Export → Export as PNG.
+USE motorwise;
+
+SHOW TABLES;
+
+DESCRIBE vehicles;
+
+DESCRIBE transactions;
+
+-- Relationships (foreign keys)
+SELECT table_name AS child_table, column_name AS child_column,
+       referenced_table_name AS parent_table, referenced_column_name AS parent_column
+FROM information_schema.key_column_usage
+WHERE table_schema = 'motorwise' AND referenced_table_name IS NOT NULL
+ORDER BY child_table;
+
+-- Receipt query (transactions + vehicles + customers working together)
+SELECT t.receipt_number, t.transaction_date,
+       v.model_year, v.make, v.model, v.vin,
+       c.first_name, c.last_name,
+       t.vehicle_price, t.tax, t.total, t.payment_status
+FROM transactions t
+JOIN vehicles  v ON v.vehicle_id  = t.vehicle_id
+JOIN customers c ON c.customer_id = t.customer_id
+WHERE t.receipt_number = 'MW-20261015-0001';
+
+
+-- View all inventory (employee view)
+SELECT vehicle_id, stock_number, model_year, make, model, price, status, features
+FROM v_inventory_manage;
+
+-- ADD a vehicle
+CALL sp_add_vehicle(2, 'MW005', 'MWSAMPLE000000005', 2025, 'Toyota', 'Camry', 1200,
+     29500.00, 'Sedan', '2.5L', 'Automatic', 'FWD', 'Silver', 'Like new', NULL);
+
+CALL sp_add_vehicle_feature(2, 5, 'Backup Camera');
+
+SELECT vehicle_id, stock_number, make, model, price, status, features
+FROM v_inventory_manage WHERE vehicle_id = 5;
+
+-- EDIT the price
+CALL sp_update_vehicle(2, 5, 'MW005', 'MWSAMPLE000000005', 2025, 'Toyota', 'Camry', 1200,
+     28900.00, 'Sedan', '2.5L', 'Automatic', 'FWD', 'Silver', 'Price reduced', NULL);
+
+SELECT vehicle_id, stock_number, make, model, price, status
+FROM v_inventory_manage WHERE vehicle_id = 5;
+
+-- REMOVE (customers no longer see it)
+CALL sp_remove_vehicle(2, 5);
+
+SELECT vehicle_id, make, model, status FROM v_inventory_manage WHERE vehicle_id = 5;
+
+SELECT vehicle_id, make, model FROM v_available_inventory;
+
+-- RESTORE
+CALL sp_restore_vehicle(2, 5);
+
+SELECT vehicle_id, make, model, status FROM v_inventory_manage WHERE vehicle_id = 5;
+
+-- MARK SOLD
+CALL sp_mark_vehicle_sold(2, 5);
+
+SELECT vehicle_id, make, model, status FROM v_inventory_manage WHERE vehicle_id = 5;
+
+-- Purchase workflow (vehicle 1: available -> pending -> available)
+CALL sp_reserve_vehicle(1);
+
+SELECT vehicle_id, make, model, status FROM v_inventory_manage WHERE vehicle_id = 1;
+
+CALL sp_release_vehicle(1);
+
+SELECT vehicle_id, make, model, status FROM v_inventory_manage WHERE vehicle_id = 1;
+
+
+-- Error cases. Each of these should fail, and the error message is the screenshot. Run them one at a time, because Workbench stops at the first error if you run them together. The third one only fails because vehicle 5 is sold from the step above.
+
+
+-- Invalid VIN
+CALL sp_add_vehicle(2, 'MW006', 'SHORT', 2025, 'Test', 'Car', 0, 1000.00,
+     NULL, NULL, NULL, NULL, NULL, NULL, NULL);
+
+-- Unknown employee (access control)
+CALL sp_add_vehicle(99, 'MW007', 'MWSAMPLE000000007', 2025, 'Test', 'Car', 0, 1000.00,
+     NULL, NULL, NULL, NULL, NULL, NULL, NULL);
+
+-- Editing a sold vehicle
+CALL sp_update_vehicle(2, 5, 'MW005', 'MWSAMPLE000000005', 2025, 'Toyota', 'Camry', 1200,
+     1.00, 'Sedan', '2.5L', 'Automatic', 'FWD', 'Silver', 'Edit sold car', NULL);
+
+-- Buying a car that is already sold
+CALL sp_reserve_vehicle(4);
+
+
+
+USE motorwise;
+
+-- 1. All available vehicles (no filters)
+CALL sp_search_vehicles(NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL);
+
+-- 2. Filter by make and maximum price (Subaru, up to $35,000)
+CALL sp_search_vehicles('Subaru', NULL, NULL, NULL, NULL, 35000, NULL, NULL, NULL, 'price_asc');
+
+-- 3. Filter by price range, sorted by price (low to high)
+CALL sp_search_vehicles(NULL, NULL, NULL, NULL, 25000, 45000, NULL, NULL, NULL, 'price_asc');
+
+-- 4. Filter by body type, model year, and feature (SUVs from 2025 with Bluetooth)
+CALL sp_search_vehicles(NULL, NULL, 2025, NULL, NULL, NULL, NULL, 'SUV', 'Bluetooth', 'price_desc');
+
+-- 5. Filter by maximum mileage (under 1,000 miles)
+CALL sp_search_vehicles(NULL, NULL, NULL, NULL, NULL, NULL, 1000, NULL, NULL, 'mileage_asc');
+
+-- 6. Search by model name (partial match)
+CALL sp_search_vehicles(NULL, 'Sierra', NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL);
+
+-- 7. No results (shows an empty result is handled)
+CALL sp_search_vehicles('Subaru', NULL, NULL, NULL, NULL, 1000, NULL, NULL, NULL, NULL);
+
+-- 8. Validation error (minimum price greater than maximum price)
+CALL sp_search_vehicles(NULL, NULL, NULL, NULL, 50000, 10000, NULL, NULL, NULL, NULL);
+
+-- 9. Sold and removed vehicles are never returned
+--    (the HR-V is sold; it shows in the employee view but not in search results)
+SELECT vehicle_id, make, model, status FROM v_inventory_manage WHERE status <> 'available';
+SELECT vehicle_id, make, model FROM v_available_inventory;
